@@ -1,3 +1,4 @@
+import base64
 import pkcs11
 from pkcs11 import Mechanism, ObjectClass
 import os
