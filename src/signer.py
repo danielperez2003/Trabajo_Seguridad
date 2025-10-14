@@ -93,7 +93,7 @@ class FileSigner:
     
     def verify_signature(self, file_path: str, signature_path: str) -> bool:
         """
-        Verify file signature against original file.
+        Verify file signature against original file using local certificate.
         
         Args:
             file_path: Path to original file
@@ -105,40 +105,59 @@ class FileSigner:
         Raises:
             FileNotFoundError: If files are missing
         """
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding
+        import base64
+        import json
+        from pathlib import Path
+
         if not Path(file_path).exists():
             raise FileNotFoundError(f"File not found: {file_path}")
         if not Path(signature_path).exists():
             raise FileNotFoundError(f"Signature file not found: {signature_path}")
-        
+
         try:
             # Load signature package from file
             with open(signature_path, 'r') as f:
                 signature_package = json.load(f)
-            
+
             # Verify file integrity by comparing hashes
-            current_hash = self.calculate_file_hash(file_path, signature_package['hash_algorithm'])
+            hash_algorithm = signature_package.get('hash_algorithm', 'sha256')
+            import hashlib
+            hash_func = getattr(hashlib, hash_algorithm)()
+            with open(file_path, 'rb') as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hash_func.update(chunk)
+            current_hash = hash_func.hexdigest()
             if current_hash != signature_package['file_hash']:
                 print("File has been modified since signing!")
                 return False
-            
-            # Read file content for signature verification
-            with open(file_path, 'rb') as f:
-                file_data = f.read()
-            
+
             # Decode signature and certificate from base64
             signature = base64.b64decode(signature_package['signature'])
             certificate = base64.b64decode(signature_package['certificate'])
-            
-            # Verify digital signature
-            self.dnie.connect('')  # Empty PIN for read-only operations
-            is_valid = self.dnie.verify_signature(file_data, signature, certificate)
-            self.dnie.close()
-            
-            return is_valid
-            
+
+            # Load certificate and extract public key
+            cert = x509.load_der_x509_certificate(certificate)
+            public_key = cert.public_key()
+
+            # Verify digital signature locally
+            with open(file_path, 'rb') as f:
+                file_data = f.read()
+            public_key.verify(
+                signature,
+                file_data,
+                padding.PKCS1v15(),
+                hashes.SHA256()
+            )
+
+            return True
+
         except Exception as e:
             print(f"Verification error: {str(e)}")
             return False
+
     
     def export_certificate(self, pin: str, output_path: str = "dnie_certificate.der") -> str:
         """
