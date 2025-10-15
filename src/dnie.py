@@ -1,4 +1,5 @@
 import base64
+import platform
 import pkcs11
 from pkcs11 import Mechanism, ObjectClass
 import os
@@ -6,7 +7,15 @@ import hashlib
 
 class DNIeManager:
     def __init__(self):
-        self.lib_path = "/usr/lib/opensc-pkcs11.so"
+        # Configurar ruta de librería según el sistema operativo
+        system = platform.system()
+        if system == "Windows":
+            self.lib_path = r"C:\Program Files\OpenSC Project\OpenSC\pkcs11\opensc-pkcs11.dll"    #"C:\Windows\System32\aetpkss1.dll"  # Driver DNIe Windows
+        elif system == "Darwin":  # macOS
+            self.lib_path = "/usr/lib/opensc-pkcs11.so"
+        else:  # Linux
+            self.lib_path = "/usr/lib/opensc-pkcs11.so"
+        
         self.session = None
     
     def authenticate(self, pin: str) -> bytes:
@@ -16,7 +25,7 @@ class DNIeManager:
             slots = lib.get_slots(token_present=True)
             
             if not slots:
-                raise Exception("No DNIe found")
+                raise Exception(f"No DNIe found. Please insert your DNIe card. (Using: {self.lib_path})")
             
             token = slots[0].get_token()
             self.session = token.open(user_pin=pin)
@@ -34,6 +43,16 @@ class DNIeManager:
             # Derive key from signature
             return self._derive_key(signature)
             
+        except pkcs11.PKCS11Error as e:
+            if "CKR_PIN_INCORRECT" in str(e):
+                raise Exception("Incorrect PIN. Please check your DNIe PIN.")
+            elif "CKR_PIN_LOCKED" in str(e):
+                raise Exception("DNIe locked. Too many incorrect PIN attempts.")
+            else:
+                raise Exception(f"PKCS#11 error: {str(e)}")
+        except FileNotFoundError:
+            raise Exception(f"PKCS#11 library not found at: {self.lib_path}\n"
+                          f"Please install DNIe drivers for {platform.system()}")
         except Exception as e:
             raise Exception(f"DNIe authentication failed: {str(e)}")
     
