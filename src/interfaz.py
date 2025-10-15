@@ -100,6 +100,10 @@ class BitwardenLikeApp(ctk.CTk):
         self.import_btn = ctk.CTkButton(self.sidebar, text=" Import JSON", fg_color="#2563eb", hover_color="#1e4fd3", corner_radius=8, command=self.on_import)
         self.import_btn.pack(padx=16, pady=(0,6), fill="x")
 
+        self.firm_btn = ctk.CTkButton(self.sidebar, text=" Firmar Documento", fg_color="#2563eb", hover_color="#1e4fd3", corner_radius=8, command=self.on_firm)
+        self.firm_btn.pack(padx=16, pady=(0,6), fill="x")
+         
+
         # Toggle modo (claro/oscuro)
         toggles_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         toggles_frame.pack(side="bottom", fill="x", pady=16, padx=8)
@@ -124,6 +128,10 @@ class BitwardenLikeApp(ctk.CTk):
 
     def on_import(self):
         messagebox.showinfo("Importar", "Función de import no implementada en este prototipo.")
+
+    def on_firm(self):
+        messagebox.showinfo("FIRMAR", "FIRMAR no definida aun")
+
 
     # ---------- Main view (search + list) ----------
     def _build_main_view(self):
