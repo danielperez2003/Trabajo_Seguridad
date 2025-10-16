@@ -1,8 +1,7 @@
-"Interfaz por linea de comandos"
+# cli.py - Interfaz de línea de comandos con autenticación DNIe integrada
 import click
 import getpass
-from .crypto import CryptoManager
-from .dnie import DNIeManager
+from crypto import CryptoManager
 
 @click.group()
 def cli():
@@ -13,16 +12,10 @@ def cli():
 def init():
     """Initialize password manager with DNIe"""
     try:
-        pin = getpass.getpass("Enter DNIe PIN: ")
-        
-        dnie = DNIeManager()
-        key = dnie.authenticate(pin)
-        
         crypto = CryptoManager()
-        crypto.initialize_db(key)
-        
-        click.echo("✅ Password manager initialized successfully!")
-        dnie.close()
+        crypto.initialize_db()
+        click.echo("✅ Password manager initialized successfully with DNIe!")
+        crypto.close()
         
     except Exception as e:
         click.echo(f"❌ Error: {str(e)}")
@@ -32,43 +25,60 @@ def init():
 @click.option('--username', prompt='Username')
 @click.option('--password', prompt=True, hide_input=True)
 def add(service, username, password):
-    """Add password entry"""
+    """Add password entry using DNIe authentication"""
     try:
-        pin = getpass.getpass("Enter DNIe PIN: ")
-        
-        dnie = DNIeManager()
-        key = dnie.authenticate(pin)
-        
         crypto = CryptoManager()
-        crypto.fernet = crypto.fernet.__class__(key)
         crypto.add_password(service, username, password)
-        
         click.echo("✅ Password added successfully!")
-        dnie.close()
+        crypto.close()
         
     except Exception as e:
         click.echo(f"❌ Error: {str(e)}")
 
 @cli.command()
 def list():
-    """List all password entries"""
+    """List all password entries using DNIe authentication"""
     try:
-        pin = getpass.getpass("Enter DNIe PIN: ")
-        
-        dnie = DNIeManager()
-        key = dnie.authenticate(pin)
-        
         crypto = CryptoManager()
-        crypto.fernet = crypto.fernet.__class__(key)
         entries = crypto.list_entries()
         
-        for entry in entries:
-            click.echo(f"Service: {entry['service']}, Username: {entry['username']}")
+        if not entries:
+            click.echo("📭 No password entries found")
+        else:
+            click.echo("🔐 Stored passwords:")
+            for entry in entries:
+                click.echo(f"  Service: {entry['service']}")
+                click.echo(f"  Username: {entry['username']}")
+                click.echo("  " + "-" * 30)
             
-        dnie.close()
+        crypto.close()
         
     except Exception as e:
         click.echo(f"❌ Error: {str(e)}")
+
+@cli.command()
+def status():
+    """Check DNIe status and connection"""
+    try:
+        from dnie import DNIeManager
+        import pkcs11
+        
+        dnie = DNIeManager()
+        dnie._lib = pkcs11.lib(dnie.lib_path)
+        slots = dnie._lib.get_slots(token_present=True)
+        
+        if slots:
+            token = slots[0].get_token()
+            click.echo("✅ DNIe Information:")
+            click.echo(f"   Label: {token.label}")
+            click.echo(f"   Manufacturer: {token.manufacturer_id}")
+            click.echo(f"   Model: {token.model}")
+            click.echo("   Status: Ready for authentication")
+        else:
+            click.echo("❌ No DNIe detected - please insert your DNIe card")
+            
+    except Exception as e:
+        click.echo(f"❌ Error accessing DNIe: {str(e)}")
 
 if __name__ == '__main__':
     cli()

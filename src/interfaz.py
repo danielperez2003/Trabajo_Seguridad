@@ -1,16 +1,22 @@
+# interfaz.py - Interfaz gráfica completa con popups para PIN y funciones de firma/verificación
 import os
 import json
 import datetime
 import string   
 import random
-import pyperclip
 import customtkinter as ctk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog, simpledialog
+from pathlib import Path
 import OTP
-from tkinter import filedialog
-import traceback
-import sys
-from firma.signer import FileSigner
+from dnie import DNIeManager
+
+# --- Manejo de pyperclip con fallback ---
+try:
+    import pyperclip
+    PYPERCLIP_AVAILABLE = True
+except ImportError:
+    PYPERCLIP_AVAILABLE = False
+    print("⚠️  pyperclip no está instalado. Las funciones de copiado no estarán disponibles.")
 
 # Configuración básica (ruta del vault)
 VAULT_DIR = os.path.expanduser("~/Documents/UNIVERSIDAD/CIBER/PROYECTO_SEC")
@@ -34,6 +40,16 @@ def save_entries(entries):
 def now_iso():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+def ask_dnie_pin(parent=None, purpose="autenticación"):
+    """Solicitar PIN del DNIe mediante popup"""
+    pin = simpledialog.askstring(
+        "PIN del DNIe", 
+        f"Introduzca el PIN de su DNIe para {purpose}:",
+        parent=parent,
+        show='*'
+    )
+    return pin
+
 # ---------- App ----------
 class BitwardenLikeApp(ctk.CTk):
     def __init__(self):
@@ -42,10 +58,7 @@ class BitwardenLikeApp(ctk.CTk):
         self.geometry("1000x600")
         self.minsize(900, 560)
 
-        
-    
-
-        # Apariencia (claro = blanco + azul)
+        # Apariencia
         ctk.set_appearance_mode("light")
         ctk.set_default_color_theme("blue")
 
@@ -54,25 +67,16 @@ class BitwardenLikeApp(ctk.CTk):
         self.filtered_names = []
         self.selected_name = None
 
-        # Apariencia (claro = blanco + azul)
-        ctk.set_appearance_mode("light")   # "dark" or "light"
-        ctk.set_default_color_theme("blue")
-
-        # Datos
-        self.entries = load_entries()   # dict: name -> {Usuario, Contraseña, Notas, Fecha}
-        self.filtered_names = []        # lista filtrada para la UI
-        self.selected_name = None
-
-        # Layout: sidebar | main
+        # Layout: sidebar | main | detail
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        # Sidebar (izquierda, oscuro)
+        # Sidebar
         self.sidebar = ctk.CTkFrame(self, width=220, corner_radius=0, fg_color="#0f1724")
         self.sidebar.grid(row=0, column=0, sticky="nsw")
         self._build_sidebar()
 
-        # Main area (centro + derecha)
+        # Main area
         self.main = ctk.CTkFrame(self, fg_color="transparent")
         self.main.grid(row=0, column=1, sticky="nsew", padx=12, pady=12)
         self.main.grid_rowconfigure(1, weight=1)
@@ -89,7 +93,6 @@ class BitwardenLikeApp(ctk.CTk):
         self._refresh_names()
         self._apply_filter()
 
-    # ---------- Sidebar ----------
     def _build_sidebar(self):
         self.logo = ctk.CTkLabel(self.sidebar, text="Vault", font=ctk.CTkFont(size=20, weight="bold"), text_color="white")
         self.logo.pack(padx=16, pady=(18,6), anchor="w")
@@ -104,10 +107,13 @@ class BitwardenLikeApp(ctk.CTk):
         self.import_btn = ctk.CTkButton(self.sidebar, text=" Import JSON", fg_color="#2563eb", hover_color="#1e4fd3", corner_radius=8, command=self.on_import)
         self.import_btn.pack(padx=16, pady=(0,6), fill="x")
 
-        self.firm_btn = ctk.CTkButton(self.sidebar, text=" Firmar Documento", fg_color="#2563eb", hover_color="#1e4fd3", corner_radius=8, command=self.on_firm)
+        # Botones de firma/verificación
+        self.firm_btn = ctk.CTkButton(self.sidebar, text=" 🔏 Firmar Documento", fg_color="#2563eb", hover_color="#1e4fd3", corner_radius=8, command=self.on_firm)
         self.firm_btn.pack(padx=16, pady=(0,6), fill="x")
-         
 
+        self.verify_btn = ctk.CTkButton(self.sidebar, text=" 🔍 Verificar Firma", fg_color="#0d9488", hover_color="#0f766e", corner_radius=8, command=self.on_verify)
+        self.verify_btn.pack(padx=16, pady=(0,6), fill="x")
+         
         # Toggle modo (claro/oscuro)
         toggles_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         toggles_frame.pack(side="bottom", fill="x", pady=16, padx=8)
@@ -116,15 +122,12 @@ class BitwardenLikeApp(ctk.CTk):
             toggles_frame,
             text="Dark mode",
             command=self._toggle_mode,
-             progress_color="#2563eb",  # color del slider
-             button_color="#60a5fa"
-    )
-        # Inicializar posición según el modo actual
+            progress_color="#2563eb",
+            button_color="#60a5fa"
+        )
         self.mode_switch.select() if ctk.get_appearance_mode() == "Dark" else self.mode_switch.deselect()
         self.mode_switch.pack(anchor="w", padx=10, pady=6)
         
-        
-
     def _toggle_mode(self):
         cur = ctk.get_appearance_mode()
         new_mode = "Dark" if cur == "Light" else "Light"
@@ -134,27 +137,80 @@ class BitwardenLikeApp(ctk.CTk):
         messagebox.showinfo("Importar", "Función de import no implementada en este prototipo.")
 
     def on_firm(self):
+        """Firmar un documento usando DNIe"""
         try:
-            # Seleccionar el archivo a firmar
+            # Seleccionar archivo a firmar
             file_path = filedialog.askopenfilename(
-                title="Selecciona el fichero a firmar",
+                title="Selecciona el archivo a firmar",
                 filetypes=[("Todos los archivos", "*.*")]
             )
             if not file_path:
-                return  # cancelado
+                return
 
-            signer = FileSigner()
-            sig_path = file_path + ".sig"
+            # Solicitar PIN del DNIe
+            pin = ask_dnie_pin(self, "firmar el documento")
+            if not pin:
+                return
 
             # Firmar el archivo
-            signer.sign_file(file_path, sig_path)
-
-            messagebox.showinfo("Firma completada", f"Archivo firmado correctamente.\n\nFirma guardada en:\n{sig_path}")
+            dnie = DNIeManager()
+            signature_package = dnie.sign_file(file_path, pin)
+            
+            # Guardar firma en archivo
+            signature_path = file_path + ".firma.json"
+            with open(signature_path, 'w') as f:
+                json.dump(signature_package, f, indent=2, ensure_ascii=False)
+            
+            dnie.close()
+            
+            messagebox.showinfo("Firma completada", 
+                f"✅ Documento firmado correctamente\n\n"
+                f"📄 Archivo: {Path(file_path).name}\n"
+                f"🔏 Firma guardada en: {Path(signature_path).name}\n"
+                f"📊 Hash: {signature_package['file_hash'][:16]}...")
 
         except Exception as e:
-            traceback.print_exc()
-            messagebox.showerror("Error al firmar", f"No se pudo firmar el archivo.\n\n{str(e)}")
+            messagebox.showerror("Error al firmar", f"No se pudo firmar el archivo:\n\n{str(e)}")
 
+    def on_verify(self):
+        """Verificar firma de un documento"""
+        try:
+            # Seleccionar archivo original
+            file_path = filedialog.askopenfilename(
+                title="Selecciona el archivo original",
+                filetypes=[("Todos los archivos", "*.*")]
+            )
+            if not file_path:
+                return
+
+            # Seleccionar archivo de firma
+            signature_path = filedialog.askopenfilename(
+                title="Selecciona el archivo de firma (.firma.json)",
+                filetypes=[("Archivos de firma", "*.firma.json"), ("Todos los archivos", "*.*")]
+            )
+            if not signature_path:
+                return
+
+            # Verificar firma
+            dnie = DNIeManager()
+            is_valid = dnie.verify_signature(file_path, signature_path)
+            dnie.close()
+
+            if is_valid:
+                messagebox.showinfo("Verificación exitosa", 
+                    f"✅ Firma VÁLIDA\n\n"
+                    f"📄 Archivo: {Path(file_path).name}\n"
+                    f"🔏 Firma verificada correctamente\n"
+                    f"📋 El archivo no ha sido modificado")
+            else:
+                messagebox.showerror("Verificación fallida", 
+                    f"❌ Firma INVÁLIDA\n\n"
+                    f"📄 Archivo: {Path(file_path).name}\n"
+                    f"🔏 La firma no es válida\n"
+                    f"⚠️  El archivo puede haber sido modificado")
+
+        except Exception as e:
+            messagebox.showerror("Error en verificación", f"No se pudo verificar la firma:\n\n{str(e)}")
 
     # ---------- Main view (search + list) ----------
     def _build_main_view(self):
@@ -200,7 +256,7 @@ class BitwardenLikeApp(ctk.CTk):
         # Filter names
         matched = []
         for name, data in sorted(self.entries.items()):
-            if txt == "" or txt in name.lower() or txt in data.get("Usuario", "").lower():
+            if txt == "" or txt in name.lower() or txt in data.get("Username", "").lower():
                 matched.append((name, data))
 
         # Create a card (button-like) per entry
@@ -213,7 +269,7 @@ class BitwardenLikeApp(ctk.CTk):
 
             lbl_name = ctk.CTkLabel(left, text=name, anchor="w", font=ctk.CTkFont(size=12, weight="bold"))
             lbl_name.pack(anchor="w")
-            sub = ctk.CTkLabel(left, text=data.get("Usuario", ""), anchor="w", text_color="#475569")
+            sub = ctk.CTkLabel(left, text=data.get("Username", ""), anchor="w", text_color="#475569")
             sub.pack(anchor="w")
 
             right = ctk.CTkFrame(card, fg_color="transparent")
@@ -239,8 +295,11 @@ class BitwardenLikeApp(ctk.CTk):
         if data:
             pwd = data.get("Password", "")
             if pwd:
-                pyperclip.copy(pwd)
-                messagebox.showinfo("Copied", f"Password of '{name}' copied into the clipboard")
+                if PYPERCLIP_AVAILABLE:
+                    pyperclip.copy(pwd)
+                    messagebox.showinfo("Copied", f"Password of '{name}' copied into the clipboard")
+                else:
+                    messagebox.showinfo("Password", f"Password for '{name}':\n\n{pwd}\n\n(Manual copy required)")
 
     # ---------- Detail pane ----------
     def _build_detail_pane(self):
@@ -248,64 +307,53 @@ class BitwardenLikeApp(ctk.CTk):
         hdr = ctk.CTkLabel(self.detail, text="Details", font=ctk.CTkFont(size=16, weight="bold"))
         hdr.grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(8,6))
 
-        # Nombre
-        lbl = ctk.CTkLabel(self.detail, text="Name", anchor="w")
-        lbl.grid(row=1, column=0, sticky="w", padx=12, pady=(6,2))
-        self.name_var = ctk.StringVar()
-        self.name_entry = ctk.CTkEntry(self.detail, textvariable=self.name_var, width=280, corner_radius=8)
-        self.name_entry.grid(row=2, column=0, columnspan=2, padx=12, pady=(0,6))
+        # Campos del formulario
+        fields = [
+            ("Name", "name_var", "name_entry"),
+            ("Username", "user_var", "user_entry"), 
+            ("Password", "pwd_var", "pwd_entry")
+        ]
+        
+        for i, (label, var_name, entry_name) in enumerate(fields):
+            row = i*2 + 1
+            lbl = ctk.CTkLabel(self.detail, text=label, anchor="w")
+            lbl.grid(row=row, column=0, sticky="w", padx=12, pady=(6,2))
+            
+            var = ctk.StringVar()
+            setattr(self, var_name, var)
+            
+            entry = ctk.CTkEntry(self.detail, textvariable=var, width=280, corner_radius=8)
+            if label == "Password":
+                entry.configure(show="*")
+            entry.grid(row=row+1, column=0, columnspan=2, padx=12, pady=(0,6))
+            setattr(self, entry_name, entry)
 
-        # Usuario
-        lbl = ctk.CTkLabel(self.detail, text="Username", anchor="w")
-        lbl.grid(row=3, column=0, sticky="w", padx=12, pady=(6,2))
-        self.user_var = ctk.StringVar()
-        self.user_entry = ctk.CTkEntry(self.detail, textvariable=self.user_var, width=280, corner_radius=8)
-        self.user_entry.grid(row=4, column=0, columnspan=2, padx=12, pady=(0,6))
-
-        # Contraseña + copy + show
-        lbl = ctk.CTkLabel(self.detail, text="Password", anchor="w")
-        lbl.grid(row=5, column=0, sticky="w", padx=12, pady=(6,2))
-        self.pwd_var = ctk.StringVar()
-        self.pwd_entry = ctk.CTkEntry(self.detail, textvariable=self.pwd_var, width=200, corner_radius=8, show="*")
-        self.pwd_entry.grid(row=6, column=0, padx=12, pady=(0,6), sticky="w")
-
+        # Controles de contraseña
         self.show_pwd_var = ctk.BooleanVar(value=False)
         self.show_chk = ctk.CTkCheckBox(self.detail, text="Show", variable=self.show_pwd_var, command=self._toggle_show, corner_radius=10)
         self.show_chk.grid(row=6, column=3, padx=6, pady=(0,6), sticky="w")
 
         self.reconfig_btn = ctk.CTkButton(
-        self.detail,
-        text="Random Secured Password",
-         fg_color="#0d133c",
-        hover_color="#0d094d",
-        corner_radius=10,
-        command=self._generar_password)
+            self.detail,
+            text="Random Password",
+            fg_color="#0d133c",
+            hover_color="#0d094d",
+            corner_radius=10,
+            command=self._generar_password
+        )
         self.reconfig_btn.grid(row=6, column=1, padx=(12,6), pady=(0,6), sticky="w")
 
-
-##### RANDOM PASSWORD GENERATOR BUTTON
-    def generar_contraseña(self, longitud=15):
-        caracteres = string.ascii_letters + string.digits + string.punctuation
-        return ''.join(random.choice(caracteres) for _ in range(longitud))
-
-    def _generar_password(self):
-        nueva_pwd = self.generar_contraseña(15)  # ahora se llama con self
-        self.pwd_var.set(nueva_pwd)
-        pyperclip.copy(nueva_pwd)
-        messagebox.showinfo("Password Generada", "Se ha generado una contraseña segura y copiado al portapapeles.")
-
-######
-        # Notas (multilínea)
+        # Notas
         lbl = ctk.CTkLabel(self.detail, text="Extra Info", anchor="w")
         lbl.grid(row=7, column=0, sticky="w", padx=12, pady=(6,2))
         self.notes_box = ctk.CTkTextbox(self.detail, width=300, height=120, corner_radius=8)
         self.notes_box.grid(row=8, column=0, columnspan=2, padx=12, pady=(0,6))
 
-        # Fecha (info)
+        # Fecha
         self.date_label = ctk.CTkLabel(self.detail, text="Last update date: -", text_color="#475569")
         self.date_label.grid(row=9, column=0, columnspan=2, sticky="w", padx=12, pady=(6,4))
 
-        # Action buttons
+        # Botones de acción
         action_frame = ctk.CTkFrame(self.detail, fg_color="transparent")
         action_frame.grid(row=10, column=0, columnspan=2, sticky="ew", padx=12, pady=(6,12))
         action_frame.grid_columnconfigure((0,1,2), weight=1)
@@ -317,18 +365,31 @@ class BitwardenLikeApp(ctk.CTk):
         self.delete_btn = ctk.CTkButton(action_frame, text="Delete", fg_color="#fb7185", hover_color="#f43f5e", corner_radius=10, command=self.on_delete)
         self.delete_btn.grid(row=0, column=2, padx=4, sticky="ew")
 
+    def generar_contraseña(self, longitud=15):
+        caracteres = string.ascii_letters + string.digits + string.punctuation
+        return ''.join(random.choice(caracteres) for _ in range(longitud))
+
+    def _generar_password(self):
+        nueva_pwd = self.generar_contraseña(15)
+        self.pwd_var.set(nueva_pwd)
+        if PYPERCLIP_AVAILABLE:
+            pyperclip.copy(nueva_pwd)
+            messagebox.showinfo("Password Generada", "Se ha generado una contraseña segura y copiado al portapapeles.")
+        else:
+            messagebox.showinfo("Password Generada", f"Se ha generado una contraseña segura:\n\n{nueva_pwd}\n\n(Manual copy required)")
+
     def _toggle_show(self):
+        """Mostrar/ocultar contraseña con verificación TOTP"""
         if self.show_pwd_var.get():
-        # Mostrar QR (si es la primera vez) y pedir verificación
+            # Mostrar QR (si es la primera vez) y pedir verificación
             if OTP.mostrar_qr_y_verificar(self):
                 self.pwd_entry.configure(show="")
             else:
                 self.show_pwd_var.set(False)  # cancelar si falla
                 self.pwd_entry.configure(show="*")
         else:
-        # Ocultar contraseña
+            # Ocultar contraseña
             self.pwd_entry.configure(show="*")
-
 
     # ---------- Actions ----------
     def _select_name(self, name):
@@ -339,8 +400,8 @@ class BitwardenLikeApp(ctk.CTk):
         self.user_var.set(data.get("Username", ""))
         self.pwd_var.set(data.get("Password", ""))
         self.notes_box.delete("0.0", "end")
-        self.notes_box.insert("0.0", data.get("Notas", ""))
-        self.date_label.configure(text=f"Last modification: {data.get('Date','-')}")
+        self.notes_box.insert("0.0", data.get("Extra info", ""))
+        self.date_label.configure(text=f"Last modification: {data.get('FDate','-')}")
 
     def on_new(self):
         # clear detail pane for new entry
@@ -362,7 +423,6 @@ class BitwardenLikeApp(ctk.CTk):
             "Extra info": self.notes_box.get("0.0", "end").strip(),
             "FDate": now_iso()
         }
-        # If rename (selected_name != name) handle removal of old key
         if self.selected_name and self.selected_name != name:
             if self.selected_name in self.entries:
                 del self.entries[self.selected_name]
@@ -376,8 +436,11 @@ class BitwardenLikeApp(ctk.CTk):
     def on_copy(self):
         pwd = self.pwd_var.get()
         if pwd:
-            pyperclip.copy(pwd)
-            messagebox.showinfo("Copied", "Password copied into clipboard")
+            if PYPERCLIP_AVAILABLE:
+                pyperclip.copy(pwd)
+                messagebox.showinfo("Copied", "Password copied into clipboard")
+            else:
+                messagebox.showinfo("Password", f"Password:\n\n{pwd}\n\n(Manual copy required)")
 
     def on_delete(self):
         name = self.name_var.get().strip()
@@ -398,5 +461,3 @@ class BitwardenLikeApp(ctk.CTk):
 if __name__ == "__main__":
     app = BitwardenLikeApp()
     app.mainloop()
-
-
