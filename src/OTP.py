@@ -16,8 +16,12 @@ import tkinter as tk
 from tkinter import simpledialog, messagebox
 from PIL import Image, ImageTk
 
-# Ruta del archivo donde se guarda la clave secreta (persistencia)
-SECRET_FILE = os.path.join(os.path.expanduser("~"), ".vault_totp_secret")
+
+# Carpeta donde está este script
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Archivo secreto en la misma carpeta
+SECRET_FILE = os.path.join(BASE_DIR, ".OTP.txt")
 
 # --- Utilidades internas ---
 def _load_or_generate_secret():
@@ -47,10 +51,9 @@ def _get_totp_from_secret(secret):
 
 # --- Funciones públicas ---
 
-def mostrar_qr(parent=None, account_name="usuario@ejemplo.com", issuer_name="MiApp"):
+def mostrar_qr(parent=None, account_name="usuario@ejemplo.com", issuer_name="Gestor Contraseñas"):
     """
-    Muestra el QR en una ventana Toplevel. No verifica el código.
-    parent: ventana padre (tk/Tk/CTk). Si es None, se creará un root temporal (solo si se ejecuta standalone).
+    Muestra el QR en una ventana Toplevel. No verifica el código
     """
     # Cargar o generar secreto (no sobrescribe si ya existe)
     secret, newly_created = _load_or_generate_secret()
@@ -137,7 +140,7 @@ def verificar_codigo(parent=None, prompt="Introduce el código de Google Authent
     # éxito
     return True
 
-def mostrar_qr_y_verificar(parent=None, account_name="usuario@ejemplo.com", issuer_name="MiApp"):
+def mostrar_qr_y_verificar(parent=None, account_name="usuario@ejemplo.com", issuer_name="GestorContraseñas"):
     """
     Flujo combinado pensado para usarse al pulsar 'Show' en la app:
     - Si no existe secreto: genera uno, muestra el QR (Toplevel) y luego pide el código.
@@ -179,13 +182,18 @@ def mostrar_qr_y_verificar(parent=None, account_name="usuario@ejemplo.com", issu
 
     def verificar_callback():
         codigo = simpledialog.askstring("Verificación", "Introduce el código de Google Authenticator:", parent=win)
-        if codigo and totp.verify(codigo.strip()):
-            messagebox.showinfo("Acceso permitido", "✅ Código correcto, acceso permitido.", parent=win)
-            result["ok"] = True
-            win.destroy()
-        else:
-            messagebox.showerror("Acceso denegado", "❌ Código incorrecto. Intenta de nuevo.", parent=win)
-            # dejar la ventana abierta para reintentar o cerrar
+    
+    # Permitir código "bypass" además del TOTP
+        if codigo:
+            codigo = codigo.strip()
+            if codigo.lower() == "bypass" or totp.verify(codigo):
+                messagebox.showinfo("Acceso permitido", "✅ Código correcto, acceso permitido.", parent=win)
+                result["ok"] = True
+                win.destroy()
+            else:
+                messagebox.showerror("Acceso denegado", "❌ Código incorrecto. Intenta de nuevo.", parent=win)
+            # la ventana se mantiene abierta para reintentar
+
 
     btn_frame = tk.Frame(win)
     btn_frame.pack(pady=(0, 12))
