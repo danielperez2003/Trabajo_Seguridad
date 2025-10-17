@@ -1,0 +1,20 @@
+# UI
+customtkinter>=6.4.2
+
+# Portapapeles
+pyperclip>=1.8.2
+
+# CLI
+click>=8.1
+
+# Criptografía
+cryptography>=41.0
+
+# DNIe / Smart Card
+python-pkcs11>=0.8.0      # Windows/Linux
+PyKCS11>=1.5.10           # macOS
+
+# QR y OTP
+qrcode>=7.3
+pillow>=10.0
+
