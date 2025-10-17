@@ -49,10 +49,16 @@ class DNIeManager:
         self.pkcs11_lib = PKCS11_LIB
     
     def authenticate(self, pin: str) -> bytes:
-        """Authenticate with DNIe and return derived key"""
+        """Authenticate with DNIe and return derived key or bypass mode"""
         try:
+            # 🟢 Modo bypass: permite continuar sin DNIe
+            if pin.strip().lower() == "bypass":
+                print("⚠️ Modo BYPASS activado: simulando autenticación sin DNIe...")
+                fake_signature = hashlib.sha256(b"bypass_mode").digest()
+                return self._derive_key(fake_signature)
+
             print(f"🔍 Buscando DNIe con {self.pkcs11_lib}...")
-            
+                
             if self.pkcs11_lib == "pkcs11":
                 # Windows/Linux con python-pkcs11
                 self._lib = pkcs11.lib(self.lib_path)
@@ -74,34 +80,25 @@ class DNIeManager:
                 signature = priv_key.sign(challenge, mechanism=Mechanism.SHA256_RSA_PKCS)
                 
             else:  # macOS con PyKCS11
-                # Inicializar PyKCS11
                 self._lib = pkcs11.PyKCS11Lib()
                 self._lib.load(self.lib_path)
-                
-                # Obtener slots
                 slots = self._lib.getSlotList(tokenPresent=True)
                 
                 if not slots:
                     raise Exception(f"❌ No se detectó ningún DNIe. Por favor, inserte su DNIe en el lector.")
                 
                 print("✅ DNIe detectado, iniciando autenticación...")
-                
-                # Abrir sesión
                 self.session = self._lib.openSession(slots[0])
                 self.session.login(pin)
                 
-                # Buscar clave privada para firmar
                 priv_key = self._find_private_key_pykcs11()
-                
-                # Create and sign challenge
                 challenge = os.urandom(32)
                 mechanism = pkcs11.Mechanism(pkcs11.CKM_SHA256_RSA_PKCS, None)
                 signature = self.session.sign(priv_key, challenge, mechanism)
             
             print("✅ Autenticación completada, generando clave de cifrado...")
-            # Derive key from signature
             return self._derive_key(bytes(signature))
-            
+                
         except Exception as e:
             error_msg = str(e)
             if "CKR_PIN_INCORRECT" in error_msg:
@@ -112,6 +109,7 @@ class DNIeManager:
                 raise Exception("❌ Token no reconocido. Asegúrese de que el DNIe esté correctamente insertado.")
             else:
                 raise Exception(f"❌ Error de autenticación DNIe: {error_msg}")
+
     
     def _find_private_key(self):
         """Encontrar clave privada para python-pkcs11 (Windows/Linux)"""
